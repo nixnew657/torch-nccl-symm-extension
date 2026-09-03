@@ -1,26 +1,32 @@
 # NCCL Symmetric Memory Extension
 
-一个面向 PyTorch 的独立扩展：通过 `ncclMemAlloc` 分配 tensor，并通过
-`ncclCommWindowRegister(..., NCCL_WIN_COLL_SYMMETRIC)` 注册到已有的
-`ProcessGroupNCCL` communicator。注册后的 tensor 可直接传给标准
-`torch.distributed` 集合通信接口。
-可与 torch 2.9 等不支持symmetric的结合使用
+[中文文档](README-zh.md)
 
-## 构建
+A standalone PyTorch extension that allocates tensors with `ncclMemAlloc` and
+registers them with an existing `ProcessGroupNCCL` communicator through
+`ncclCommWindowRegister(..., NCCL_WIN_COLL_SYMMETRIC)`. Once registered, these
+tensors can be passed directly to standard `torch.distributed` collective APIs.
 
-```
-nccl version >= 2.30.7
+This enables NCCL symmetric-memory collectives when using PyTorch versions such
+as PyTorch 2.9 that do not provide a native symmetric-memory allocation API.
 
-```
+## Requirements
+
+- NCCL version 2.30.7 or later
+- PyTorch with the NCCL backend
+- CUDA-capable GPU(s)
+
+## Build
 
 ```bash
 cd nccl-symm-mem-extension
-NCCL_HOME=/path/to/nccl  python3 setup.py build_ext --inplace
+NCCL_HOME=/path/to/nccl python3 setup.py build_ext --inplace
 ```
 
-该扩展仅调用 NCCL/CUDA host API
+The extension only invokes NCCL and CUDA host APIs, so it is built with
+`CppExtension` and does not compile CUDA device code.
 
-## 使用
+## Usage
 
 ```python
 import os
@@ -34,7 +40,7 @@ torch.cuda.set_device(local_rank)
 device = torch.device("cuda", local_rank)
 dist.init_process_group(backend="nccl", device_id=device)
 
-# 所有 WORLD rank 都必须以相同顺序创建子组。
+# Every WORLD rank must create the subgroup in the same order.
 subgroup_ranks = [0, 2]
 subgroup = dist.new_group(subgroup_ranks, backend="nccl", device_id=device)
 
@@ -49,18 +55,21 @@ if dist.get_rank() in subgroup_ranks:
 dist.destroy_process_group()
 ```
 
-`rendezvous()` 和 `registration.close()` 都是子组内的 collective 操作：子组成员必须以相同顺序调用。`x` 必须是 `symm.empty()` 返回的原始完整 tensor，不能是 view。
+Both `rendezvous()` and `registration.close()` are collectives within the given
+process group: all members of that group must call them in the same order.
+`x` must be the original, complete tensor returned by `symm.empty()`; tensor
+views are not supported.
 
-## 验证
+## Verification
 
 ```bash
-
 cd nccl-symm-mem-extension
 NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=TUNING \
   torchrun --standalone --nproc_per_node=4 tests/smoke_distributed.py
 ```
 
-满足 NCCL 对称内存拓扑条件时，日志应包含：
+When the NCCL topology meets the symmetric-memory requirements, the NCCL log
+should include:
 
 ```text
 AllReduce [Symmetric]: ...
