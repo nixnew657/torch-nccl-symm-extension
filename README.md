@@ -4,15 +4,21 @@
 `ncclCommWindowRegister(..., NCCL_WIN_COLL_SYMMETRIC)` 注册到已有的
 `ProcessGroupNCCL` communicator。注册后的 tensor 可直接传给标准
 `torch.distributed` 集合通信接口。
+可与 torch 2.9 等不支持symmetric的结合使用
 
 ## 构建
 
-```bash
-cd nccl-symm-mem-extension
-NCCL_HOME=/path/to/nccl MAX_JOBS=1 python3 setup.py build_ext --inplace
+```
+nccl version >= 2.30.7
+
 ```
 
-该扩展仅调用 NCCL/CUDA host API，不包含 CUDA kernel
+```bash
+cd nccl-symm-mem-extension
+NCCL_HOME=/path/to/nccl  python3 setup.py build_ext --inplace
+```
+
+该扩展仅调用 NCCL/CUDA host API
 
 ## 使用
 
