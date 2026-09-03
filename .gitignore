@@ -1,0 +1,14 @@
+# Native extension build artifacts
+build/
+*.so
+*.o
+*.a
+
+# Python bytecode and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Packaging artifacts
+*.egg-info/
+dist/
