@@ -12,16 +12,30 @@ as PyTorch 2.9 that do not provide a native symmetric-memory allocation API.
 
 ## Requirements
 
-- NCCL version 2.30.7 or later
+- NCCL 2.30.7+ is recommended for the latest symmetric-memory kernels and fixes
 - PyTorch with the NCCL backend
 - CUDA-capable GPU(s)
 
 ## Build
 
+Use the PEP 517 build interface exposed by `pip`:
+
 ```bash
-cd nccl-symm-mem-extension
-NCCL_HOME=/path/to/nccl python3 setup.py build_ext --inplace
+cd torch-nccl-symm-extension
+NCCL_HOME=/path/to/nccl python3 -m pip install --no-build-isolation .
 ```
+
+`--no-build-isolation` makes the build use the installed PyTorch package. This
+is required because `torch.utils.cpp_extension` is used to build the extension
+and avoids `pip` downloading another PyTorch wheel into an isolated build
+environment.
+
+To create a redistributable wheel instead of installing it immediately:
+
+```bash
+NCCL_HOME=/path/to/nccl python3 -m pip wheel --no-build-isolation --no-deps --wheel-dir dist .
+```
+without NCCL_HOME, the build will find site-package nvidia/nccl.
 
 The extension only invokes NCCL and CUDA host APIs, so it is built with
 `CppExtension` and does not compile CUDA device code.
@@ -55,17 +69,37 @@ if dist.get_rank() in subgroup_ranks:
 dist.destroy_process_group()
 ```
 
-Both `rendezvous()` and `registration.close()` are collectives within the given
-process group: all members of that group must call them in the same order.
-`x` must be the original, complete tensor returned by `symm.empty()`; tensor
-views are not supported.
+`rendezvous()` is a collective within the given process group: all members must
+call it in the same order. `registration.close()` deregisters the window locally
+on each rank and is **not** a collective (NCCL performs no barrier for
+deregistration). Before calling it, every rank must have finished all in-flight
+collectives accessing the registered range. Ranks should still call `close()` in
+the same order before destroying or aborting the ProcessGroup.
+
+A tensor (or the same aligned subwindow) may be registered concurrently with
+multiple communicators, for example WORLD and a subgroup. Those registrations
+are independent. Overlapping registrations are rejected only within one
+communicator.
+
+`x` must be the original tensor returned by `symm.empty()`, or a contiguous view
+of it whose byte offset is a multiple of 4096 (e.g. `x[1024:]` for a float32
+tensor). Every rank must register the same offset and size; other views are
+rejected. Registering a window that overlaps one already registered in the same
+group is also rejected.
+
+`empty()` validates that its `ncclMemAlloc` result is backed by CUDA CUMEM/VMM
+and fails early with an actionable error when it is not. On platforms where the
+communicator does not support symmetric memory (no all-P2P/NVLink or GIN
+topology, or `NCCL_WIN_ENABLE=0`), NCCL can return success with no window.
+`rendezvous()` detects that condition and raises a `RuntimeError` instead of
+silently falling back to regular collectives.
 
 ## Verification
 
 ```bash
-cd nccl-symm-mem-extension
+cd torch-nccl-symm-extension
 NCCL_DEBUG=INFO NCCL_DEBUG_SUBSYS=TUNING \
-  torchrun --standalone --nproc_per_node=4 tests/smoke_distributed.py
+  torchrun --standalone --nproc_per_node=4 tests/demo_distributed.py
 ```
 
 When the NCCL topology meets the symmetric-memory requirements, the NCCL log
