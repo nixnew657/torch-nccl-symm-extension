@@ -363,6 +363,19 @@ std::shared_ptr<WindowState> get_or_create_window(
   return window;
 }
 
+void release_window(
+    const std::shared_ptr<Allocation>& allocation,
+    const std::shared_ptr<WindowState>& window) {
+  const auto key = reinterpret_cast<uintptr_t>(window->comm_);
+  std::lock_guard<std::mutex> lock(allocation->mutex);
+  const auto it = allocation->windows.find(key);
+  if (it != allocation->windows.end() && it->second == window && window.use_count() == 2) {
+    // The cache and this registration are the last owners. Erase the cache so
+    // close() deregisters before ProcessGroupNCCL can destroy its communicator.
+    allocation->windows.erase(it);
+  }
+}
+
 class SymmetricRegistration final {
  public:
   SymmetricRegistration(
@@ -380,12 +393,14 @@ class SymmetricRegistration final {
   }
 
   void close() {
-    // Windows are owned by (allocation, communicator), not individual views.
-    // Closing only releases this view handle; allocation teardown deregisters once.
     if (closed_) {
       return;
     }
     closed_ = true;
+    // A tracked MemPool allocation can outlive its ProcessGroup. Drop an idle
+    // cached window now so its destructor deregisters while the communicator is
+    // still valid. Keep it cached while another registration still uses it.
+    release_window(allocation_, window_);
     window_.reset();
     allocation_.reset();
   }

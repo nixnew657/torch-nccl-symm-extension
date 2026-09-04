@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Sequence
 from threading import RLock
 from typing import Any
@@ -243,8 +244,10 @@ def release_persistent_allocation(alloc_id: int) -> None:
 
 
 def get_mem_pool(device: torch.device | str | int | None = None) -> torch.cuda.MemPool:
-    """Return a no-split NCCL allocator pool suitable for symmetric allocations.
+    """Return an NCCL allocator pool suitable for tracked symmetric allocations.
 
+    PyTorch 2.9 does not expose ``MemPool.no_split``; newer releases do. Use
+    the stronger no-split setting when it is available without excluding 2.9.
     The caller must allocate equivalent tensors in the same order on every rank,
     call :func:`track_tensor` for a tensor before rendezvous, and retain the pool
     until every associated tensor/window has been released.
@@ -258,9 +261,10 @@ def get_mem_pool(device: torch.device | str | int | None = None) -> torch.cuda.M
         allocator = getattr(backend, "mem_allocator", None)
         if allocator is None:
             raise RuntimeError("the selected NCCL backend does not expose mem_allocator")
-        _mem_pools[normalized] = torch.cuda.MemPool(
-            allocator, use_on_oom=False, no_split=True
-        )
+        mem_pool_kwargs: dict[str, bool] = {"use_on_oom": False}
+        if "no_split" in inspect.signature(torch.cuda.MemPool).parameters:
+            mem_pool_kwargs["no_split"] = True
+        _mem_pools[normalized] = torch.cuda.MemPool(allocator, **mem_pool_kwargs)
     return _mem_pools[normalized]
 
 

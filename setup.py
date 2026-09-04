@@ -116,5 +116,5 @@ setup(
     ],
     cmdclass={"build_ext": BuildExtension.with_options(no_python_abi_suffix=True)},
     python_requires=">=3.9",
-    install_requires=["torch>=2.9,<2.10"],
+    install_requires=["torch>=2.8"],
 )
