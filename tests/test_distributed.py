@@ -191,6 +191,50 @@ def test_registration_metadata_and_cached_view_handle() -> None:
         first.close()
 
 
+@requires_distributed_cuda(min_nccl_version=_NCCL_WINDOW_VERSION)
+def test_mem_pool_allocation_can_be_tracked_and_rendezvoused() -> None:
+    """A tensor allocated through the NCCL pool can use the symmetric-memory flow."""
+    device = torch.device("cuda", torch.cuda.current_device())
+    pool = symm.get_mem_pool(device)
+
+    assert isinstance(pool, torch.cuda.MemPool)
+    assert symm.get_mem_pool(device) is pool
+
+    with torch.cuda.use_mem_pool(pool, device):
+        x = torch.empty(1024, dtype=torch.float32, device=device)
+    symm.track_tensor(x)
+    assert symm.is_symmetric_tensor(x)
+
+    registration = symm.rendezvous(x)
+    try:
+        x.fill_(dist.get_rank() + 1)
+        dist.all_reduce(x)
+        torch.cuda.synchronize(device)
+        expected = dist.get_world_size() * (dist.get_world_size() + 1) / 2
+        torch.testing.assert_close(x, torch.full_like(x, expected))
+    finally:
+        registration.close()
+
+
+@requires_distributed_cuda(min_nccl_version=_NCCL_WINDOW_VERSION)
+def test_mem_pool_window_is_released_before_subgroup_destruction() -> None:
+    """Keep a tracked allocation alive after closing its subgroup registration."""
+    device = torch.device("cuda", torch.cuda.current_device())
+    subgroup = dist.new_group(ranks=list(range(dist.get_world_size())), backend="nccl", device_id=device)
+    pool = symm.get_mem_pool(device)
+    with torch.cuda.use_mem_pool(pool, device):
+        x = torch.empty(1024, dtype=torch.float32, device=device)
+    symm.track_tensor(x)
+
+    registration = symm.rendezvous(x, group=subgroup)
+    registration.close()
+    dist.destroy_process_group(subgroup)
+
+    # x deliberately remains live: window teardown must not be deferred until
+    # its underlying MemPool allocation is eventually released.
+    assert symm.is_symmetric_tensor(x)
+
+
 @requires_distributed_cuda()
 def test_persistent_allocation_reuses_address_after_release() -> None:
     alloc_id = 123456
